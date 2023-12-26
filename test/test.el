@@ -1,3 +1,4 @@
+;; -*- no-byte-compile: t; lexical-binding: t; -*-
 (require 'nodejs-repl)
 (require 'ert-expectations)
 
