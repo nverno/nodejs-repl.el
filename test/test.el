@@ -1,5 +1,6 @@
+;; -*- lexical-binding: t; -*-
 (require 'nodejs-repl)
-(require 'ert-expectations)
+(require 'ert-expectations nil t)
 
 (nodejs-repl)
 
