@@ -4,7 +4,7 @@
 
 ;; Author: Takeshi Arabiki
 ;; Version: 0.2.5
-;; Package-Requires: ((dash "2.19"))
+;; Package-Requires: ((dash "2.19") (xterm-color "2.0"))
 ;; Keywords: languages, node, repl
 ;; URL: https://github.com/nverno/nodejs-repl
 
@@ -75,7 +75,7 @@
   :group 'processes
   :prefix "nodejs-")
 
-(defconst nodejs-repl-version "0.2.4"
+(defconst nodejs-repl-version "0.2.5"
   "Node.js mode Version.")
 
 (defcustom nodejs-repl-command "node"
@@ -91,6 +91,10 @@ such as nvm."
 
 (defcustom nodejs-repl-prompt "> "
   "Node.js prompt used in `nodejs-repl-mode'."
+  :type 'string)
+
+(defcustom nodejs-repl-prompt-continue "... "
+  "Prompt continuation in inferior Node process."
   :type 'string)
 
 (defcustom nodejs-repl-use-global "true"
@@ -252,7 +256,7 @@ when receive the output string."
     (nodejs-repl-clear-line)
     (unless (equal ret token)
       (if (string-match-p "\n" ret)
-          (setq completions 
+          (setq completions
                 (-->
                  (->> ret
                       ;; remove extra substrings
@@ -267,7 +271,7 @@ when receive the output string."
                  ;; remove the first element (input) and the last element (prompt)
                  (cdr (butlast it))
                  ;; split by whitespaces: '("encodeURI encodeURIComponent") ->
-                 ;; '("encodeURI" "encodeURIComponent")                
+                 ;; '("encodeURI" "encodeURIComponent")
                  (mapconcat 'identity it " ")
                  (replace-regexp-in-string "[ \t]*$" "" it)
                  (split-string it "[ \t\r\n]+")))
@@ -286,51 +290,27 @@ when receive the output string."
       (setq proc (get-process nodejs-repl-process-name)))
     proc))
 
-(defun nodejs-repl--input-bounds ()
-  "Return bounds of current input."
-  (cons (or comint-last-output-start (point-min-marker))
-        (process-mark (get-buffer-process (current-buffer)))))
-
-(defun nodejs-repl--filter-escape-sequences (_string)
-  "Filter extra escape sequences from output."
-  (pcase-let ((`(,beg . ,end) (nodejs-repl--input-bounds)))
-    (save-excursion
-      (goto-char beg)
-      ;; Remove ansi escape sequences used in readline.js
-      (while (re-search-forward nodejs-repl-extra-espace-sequence-re end t)
-        (replace-match "")))))
-
 (defun nodejs-repl--clear-cache (_string)
   "Clear caches when outputting the result."
   (setq nodejs-repl-cache-token "")
   (setq nodejs-repl-cache-completions ()))
 
-(defun nodejs-repl--set-prompt-deletion-required-p ()
-  (setq nodejs-repl-prompt-deletion-required-p t))
-
-;; `.load` command of Node.js repl outputs a duplicated prompt
-(defun nodejs-repl--remove-duplicated-prompt (_string)
-  (pcase-let ((`(,beg . ,end) (nodejs-repl--input-bounds)))
-    (save-excursion
-      (goto-char beg)
-      (when (re-search-forward (concat nodejs-repl-prompt nodejs-repl-prompt) end t)
-        (replace-match nodejs-repl-prompt)))))
-
-(defun nodejs-repl--delete-prompt (_string)
-  ;; Redundant prompts are included in outputs from Node.js REPL
-  (when (and nodejs-repl-prompt-deletion-required-p
-             ;; To avoid end-of-buffer error at the line of (forward-char
-             ;; (length nodejs-repl-prompt))
-             (> (buffer-size) 0))
-    (setq nodejs-repl-prompt-deletion-required-p nil)
-    (pcase-let ((`(,beg . ,end) (nodejs-repl--input-bounds)))
-      (save-excursion
-        (goto-char beg)
-        (forward-line 0) ; Use forward-line instead of beginning-of-line to ignore prompts
-        (when (<= (point) (- end (length nodejs-repl-prompt)))
-          (forward-char (length nodejs-repl-prompt))
-          (while (re-search-forward nodejs-repl-prompt end t)
-            (replace-match "")))))))
+(defun nodejs-repl--preoutput-filter (string)
+  "Filter empty or repeated prompts from STRING."
+  (if (and (not (bolp))
+           ;; Ignore repeated prompts when switching windows
+           (string-match-p (rx-to-string
+                            `(seq bos (or (+ ,nodejs-repl-prompt)
+                                          (+ ,nodejs-repl-prompt-continue))
+                                  eos))
+                           string))
+      ""
+    (replace-regexp-in-string
+     (rx-to-string
+      `(: bol
+          (* (regexp ,nodejs-repl-prompt))
+          (group (regexp ,nodejs-repl-prompt) (* nonl))))
+     "\\1" string)))
 
 ;; cf. https://www.ecma-international.org/ecma-262/#sec-ecmascript-language-expressions
 (defun nodejs-repl--beginning-of-expression ()
@@ -351,18 +331,17 @@ when receive the output string."
    (t
     (nodejs-repl--backward-expression)
     (while (and (not (bobp))
-                (or
-                 (and (eq (char-syntax (char-after)) ?\()
-                      (save-excursion
-                        (search-backward-regexp "[[:graph:]]" nil t)
-                        (and (not (eq (char-after) ?\;))  ; e.g. otherExp; (exp)
-                             (not (eq (sexp-at-point) 'return)))))  ; e.g. return (exp)
-                 (save-excursion
-                   (search-backward-regexp "[[:graph:]]" nil t)
-                   (eq (char-after) ?.))
-                 (save-excursion
-                   (backward-char)
-                   (eq (sexp-at-point) 'function))))
+                (or (and (eq (char-syntax (char-after)) ?\()
+                         (save-excursion
+                           (search-backward-regexp "[[:graph:]]" nil t)
+                           (and (not (eq (char-after) ?\;)) ; e.g. otherExp; (exp)
+                                (not (eq (sexp-at-point) 'return))))) ; e.g. return (exp)
+                    (save-excursion
+                      (search-backward-regexp "[[:graph:]]" nil t)
+                      (eq (char-after) ?.))
+                    (save-excursion
+                      (backward-char)
+                      (eq (sexp-at-point) 'function))))
       (search-backward-regexp "[[:graph:]]" nil t)
       (when (eq (char-after) ?.)
         (search-backward-regexp "[[:graph:]]" nil t))
@@ -400,7 +379,8 @@ when receive the output string."
               nodejs-repl-get-completions-for-require-p t)
         (if (and require-arg
                  (or (= (length require-arg) 1)  ; only quote or double quote
-                     (not (string-match-p "[./]" (substring require-arg 1 2)))))  ; not file path
+                     ;; not file path
+                     (not (string-match-p "[./]" (substring require-arg 1 2)))))
             (setq token-length (1- (length require-arg)))
           (let ((quote-pos (save-excursion
                              (search-backward-regexp "['\"]" (line-beginning-position) t)
@@ -423,7 +403,8 @@ when receive the output string."
       (setq token (concat "require('" token)))
     (if (and (not (equal nodejs-repl-cache-token ""))
              (string-prefix-p nodejs-repl-cache-token token)
-             (not (string-match-p (concat "^" nodejs-repl-cache-token ".*?[.(/'\"]") token)))
+             (not (string-match-p
+                   (concat "^" nodejs-repl-cache-token ".*?[.(/'\"]") token)))
         (setq completions nodejs-repl-cache-completions)
       (setq completions (nodejs-repl--get-completions-from-process token)
             nodejs-repl-cache-token token
@@ -484,8 +465,9 @@ when receive the output string."
 (defun nodejs-repl-send-last-expression ()
   "Send the expression before point to the `nodejs-repl-process'."
   (interactive)
-  (nodejs-repl-send-region (save-excursion (nodejs-repl--beginning-of-expression))
-                           (point)))
+  (nodejs-repl-send-region
+   (save-excursion (nodejs-repl--beginning-of-expression))
+   (point)))
 
 ;;;###autoload
 (defun nodejs-repl-switch-to-repl ()
@@ -514,19 +496,22 @@ when receive the output string."
 Key bindings:
 \\<nodejs-repl-mode-map>"
   :syntax-table nodejs-repl-mode-syntax-table
+  (setq-local comment-start "//"
+              comment-end ""
+              comment-start-skip "//+ *")
   (set (make-local-variable 'font-lock-defaults) '(nil nil t))
-  (add-hook 'comint-output-filter-functions 'nodejs-repl--delete-prompt nil t)
-  (add-hook 'comint-output-filter-functions 'nodejs-repl--remove-duplicated-prompt nil t)
-  (add-hook 'comint-output-filter-functions 'nodejs-repl--filter-escape-sequences nil t)
   (add-hook 'comint-output-filter-functions 'nodejs-repl--clear-cache nil t)
-  (add-hook 'completion-at-point-functions 'nodejs-repl--completion-at-point-function nil t)
-  (make-local-variable 'window-configuration-change-hook)
-  (add-hook 'window-configuration-change-hook 'nodejs-repl--set-prompt-deletion-required-p)
   (setq-local comint-input-ignoredups nodejs-repl-input-ignoredups
               comint-process-echoes nodejs-repl-process-echoes
+              comint-prompt-regexp nodejs-repl-prompt
               comint-prompt-read-only t
               comint-use-prompt-regexp nil
+              comint-highlight-input nil
+              comint-scroll-to-bottom-on-input 'this
+              comint-scroll-to-bottom-on-output 'this
               comint-output-filter-functions '(ansi-color-process-output)
+              comint-preoutput-filter-functions
+              '(xterm-color-filter nodejs-repl--preoutput-filter)
               comint-indirect-setup-function
               (lambda ()
                 (let ((inhibit-message t)
@@ -537,7 +522,9 @@ Key bindings:
   (when (and (null comint-use-prompt-regexp)
              nodejs-repl-font-lock-enable
              (require 'js nil t))
-    (comint-fontify-input-mode)))
+    (comint-fontify-input-mode))
+  (add-hook 'completion-at-point-functions
+            #'nodejs-repl--completion-at-point-function nil t))
 
 ;;;###autoload
 (defun nodejs-repl (&optional show)
