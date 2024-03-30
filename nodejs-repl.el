@@ -319,12 +319,11 @@ when receive the output string."
 (defun nodejs-repl--delete-prompt (_string)
   ;; Redundant prompts are included in outputs from Node.js REPL
   (when (and nodejs-repl-prompt-deletion-required-p
-             ;; To avoid end-of-buffer error at the line of (forward-char (length nodejs-repl-prompt))
+             ;; To avoid end-of-buffer error at the line of (forward-char
+             ;; (length nodejs-repl-prompt))
              (> (buffer-size) 0))
     (setq nodejs-repl-prompt-deletion-required-p nil)
-    (let ((beg (or comint-last-output-start
-                   (point-min-marker)))
-          (end (process-mark (get-buffer-process (current-buffer)))))
+    (pcase-let ((`(,beg . ,end) (nodejs-repl--input-bounds)))
       (save-excursion
         (goto-char beg)
         (forward-line 0) ; Use forward-line instead of beginning-of-line to ignore prompts
