@@ -4,17 +4,20 @@
 
 ;; Author: Takeshi Arabiki
 ;; Version: 0.2.4
+;; Package-Requires: ((dash "2.19"))
+;; Keywords: languages, node, repl
+;; URL: https://github.com/nverno/nodejs-repl
 
 ;;  This program is free software: you can redistribute it and/or modify
 ;;  it under the terms of the GNU General Public License as published by
 ;;  the Free Software Foundation, either version 3 of the License, or
 ;;  (at your option) any later version.
-
+;;
 ;;  This program is distributed in the hope that it will be useful,
 ;;  but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;;  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;;  GNU General Public License for more details.
-
+;;
 ;;  You should have received a copy of the GNU General Public License
 ;;  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -75,7 +78,8 @@
 
 (defgroup nodejs-repl nil
   "Run Node.js REPL and communicate the process."
-  :group 'processes)
+  :group 'processes
+  :prefix "nodejs-")
 
 (defconst nodejs-repl-version "0.2.4"
   "Node.js mode Version.")
@@ -85,37 +89,36 @@
 If it is a symbol of a function, the function is called for the path of the
 Node.js command. This allows to integrate with a Node.js version manager
 such as nvm."
-  :group 'nodejs-repl
   :type 'string)
 
 (defcustom nodejs-repl-arguments '()
   "Command line parameters forwarded to `nodejs-repl-command'."
-  :group 'nodejs-repl
   :type '(repeat string))
 
 (defcustom nodejs-repl-prompt "> "
   "Node.js prompt used in `nodejs-repl-mode'."
-  :group 'nodejs-repl
   :type 'string)
 
 (defcustom nodejs-repl-use-global "true"
   "`useGlobal' option of Node.js REPL method repl.start."
-  :group 'nodejs-repl
   :type 'string)
 
 (defcustom nodejs-repl-input-ignoredups t
   "If non-nil, don't add input matching the last on the input ring.
 
 See also `comint-input-ignoredups'"
-  :group 'nodejs-repl
   :type 'boolean)
 
 (defcustom nodejs-repl-process-echoes t
   "If non-nil, Node.js does not echo any input.
 
 See also `comint-process-echoes'"
-  :group 'nodejs-repl
   :type 'boolean)
+
+(defcustom nodejs-repl-font-lock-enable t
+  "Non-nil to enable font-locking in the repl buffer."
+  :type 'boolean)
+
 
 (defvar nodejs-repl-nodejs-version)
 (defvar nodejs-repl--nodejs-version-re
@@ -135,11 +138,10 @@ See also `comint-process-echoes'"
     (modify-syntax-entry ?$ "_" st)
     st))
 
-(defvar nodejs-repl-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "TAB") 'completion-at-point)
-    (define-key map (kbd "C-c C-c") 'nodejs-repl-quit-or-cancel)
-    map))
+(defvar-keymap nodejs-repl-mode-map
+  :doc "Keymap in nodejs repl."
+  "TAB" #'completion-at-point
+  "C-c C-c" #'nodejs-repl-quit-or-cancel)
 
 (defvar nodejs-repl-code-format
   (concat
@@ -150,12 +152,14 @@ See also `comint-process-echoes'"
 
 (defvar nodejs-repl-ansi-color-sequence-re "\\(\x1b\\[[0-9]+m\\)")
 
-;;; if send string like "a; Ma\t", return a; Math\x1b[1G> a; Math\x1b[0K\x1b[10G
+;; if send string like "a; Ma\t", return a; Math\x1b[1G> a; Math\x1b[0K\x1b[10G
 (defvar nodejs-repl-prompt-re-format
   "\x1b\\[1G\x1b\\[0J%s.*\x1b\\[[0-9]+G.*$")
+
 (defvar nodejs-repl-prompt-re
   (format nodejs-repl-prompt-re-format nodejs-repl-prompt nodejs-repl-prompt))
-;;; not support Unicode characters
+
+;; not support Unicode characters
 (defvar nodejs-repl-require-re
   (concat
    "\\(?:^\\|\\s-\\|[-+*/%&|><!;{}()[]\\|\\]\\)"  ; delimiter
@@ -184,13 +188,13 @@ See also `comint-process-echoes'"
   (nth 3 (syntax-ppss pos)))
 
 (defun nodejs-repl--extract-require-argument (string)
-  (if (string-match nodejs-repl-require-re string)
-      (match-string 1 string)))
+  (and (string-match nodejs-repl-require-re string)
+       (match-string 1 string)))
 
 (defun nodejs-repl--get-last-token (string)
   "Return the last token in the STRING."
-  (if (string-match "\\([._$]\\|\\w\\)+$" string)
-      (match-string 0 string)))
+  (and (string-match "\\([._$]\\|\\w\\)+$" string)
+       (match-string 0 string)))
 
 ;;; TODO:
 ;;; * the case that a command is sent while another command is being prossesed
@@ -222,12 +226,12 @@ See also `comint-process-echoes'"
   (process-put proc 'running-p t)
   ;; trim trailing whitespaces
   (setq string (replace-regexp-in-string "[ \t\r\n]*\\'" "" string))
-  ;; TODO: write unit test for the case that the process returns 'foo' when string is 'foo\t'
+  ;; TODO: write unit test for the case that the process returns 'foo' when
+  ;; string is 'foo\t'
   (while (or (process-get proc 'running-p)
-             (not
-              (let ((last-line (process-get proc 'last-line)))
-                (or (string-match-p nodejs-repl-prompt-re last-line)
-                    (string-prefix-p string last-line)))))
+             (not (let ((last-line (process-get proc 'last-line)))
+                    (or (string-match-p nodejs-repl-prompt-re last-line)
+                        (string-prefix-p string last-line)))))
     (process-put proc 'running-p nil)
     (accept-process-output proc interval)))
 
@@ -248,29 +252,32 @@ when receive the output string."
                (nodejs-repl--send-string "\t")))
         completions)
     (nodejs-repl-clear-line)
-    (when (not (equal ret token))
+    (unless (equal ret token)
       (if (string-match-p "\n" ret)
-          (progn
-            ;; remove extra substrings
-            (setq ret (replace-regexp-in-string "\r" "" ret))
-            ;; remove LF
-            (setq ret (replace-regexp-in-string "\n\\{2,\\}" "\n" ret))
-            ;; trim trailing whitespaces
-            (setq ret (replace-regexp-in-string "[ \t\r\n]*\\'" "" ret))
-            ;; don't split by whitespaces because the prompt might have whitespaces!!
-            (setq completions (split-string ret "\n"))
-            ;; remove the first element (input) and the last element (prompt)
-            (setq completions (reverse (cdr (reverse (cdr completions)))))
-            ;; split by whitespaces
-            ;; '("encodeURI     encodeURIComponent") -> '("encodeURI" "encodeURIComponent")
-            (setq completions (split-string
-                               (replace-regexp-in-string " *$" "" (mapconcat 'identity completions " "))
-                               "[ \t\r\n]+"))
-            )
-        (setq ret (replace-regexp-in-string nodejs-repl-extra-espace-sequence-re "" ret))
+          (setq completions 
+                (-->
+                 (->> ret
+                      ;; remove extra substrings
+                      (replace-regexp-in-string "\r" "")
+                      ;; remove LF
+                      (replace-regexp-in-string "\n\\{2,\\}" "\n")
+                      ;; trim trailing whitespaces
+                      (replace-regexp-in-string "[ \t\r\n]*\\'" ""))
+                 ;; don't split by whitespaces because the
+                 ;; prompt might have whitespaces!!
+                 (split-string it "\n")
+                 ;; remove the first element (input) and the last element (prompt)
+                 (cdr (butlast it))
+                 ;; split by whitespaces: '("encodeURI encodeURIComponent") ->
+                 ;; '("encodeURI" "encodeURIComponent")                
+                 (mapconcat 'identity it " ")
+                 (replace-regexp-in-string "[ \t]*$" "" it)
+                 (split-string it "[ \t\r\n]+")))
+        (setq ret (replace-regexp-in-string
+                   nodejs-repl-extra-espace-sequence-re "" ret))
         (let ((candidate-token (nodejs-repl--get-last-token ret)))
-          (setq completions (if (or (null candidate-token) (equal candidate-token token))
-                                nil
+          (setq completions (unless (or (null candidate-token)
+                                        (equal candidate-token token))
                               (list candidate-token))))))
     completions))
 
@@ -281,11 +288,14 @@ when receive the output string."
       (setq proc (get-process nodejs-repl-process-name)))
     proc))
 
-(defun nodejs-repl--filter-escape-sequnces (_string)
+(defun nodejs-repl--input-bounds ()
+  "Return bounds of current input."
+  (cons (or comint-last-output-start (point-min-marker))
+        (process-mark (get-buffer-process (current-buffer)))))
+
+(defun nodejs-repl--filter-escape-sequences (_string)
   "Filter extra escape sequences from output."
-  (let ((beg (or comint-last-output-start
-                 (point-min-marker)))
-        (end (process-mark (get-buffer-process (current-buffer)))))
+  (pcase-let ((`(,beg . ,end) (nodejs-repl--input-bounds)))
     (save-excursion
       (goto-char beg)
       ;; Remove ansi escape sequences used in readline.js
@@ -300,11 +310,9 @@ when receive the output string."
 (defun nodejs-repl--set-prompt-deletion-required-p ()
   (setq nodejs-repl-prompt-deletion-required-p t))
 
+;; `.load` command of Node.js repl outputs a duplicated prompt
 (defun nodejs-repl--remove-duplicated-prompt (_string)
-  ;; `.load` command of Node.js repl outputs a duplicated prompt
-  (let ((beg (or comint-last-output-start
-                 (point-min-marker)))
-        (end (process-mark (get-buffer-process (current-buffer)))))
+  (pcase-let ((`(,beg . ,end) (nodejs-repl--input-bounds)))
     (save-excursion
       (goto-char beg)
       (when (re-search-forward (concat nodejs-repl-prompt nodejs-repl-prompt) end t)
@@ -313,15 +321,13 @@ when receive the output string."
 (defun nodejs-repl--delete-prompt (_string)
   ;; Redundant prompts are included in outputs from Node.js REPL
   (let ((process (get-buffer-process (current-buffer))))
-    (when (and process 
+    (when (and process
                nodejs-repl-prompt-deletion-required-p
                ;; To avoid end-of-buffer error at the line of (forward-char
                ;; (length nodejs-repl-prompt))
                (> (buffer-size) 0))
       (setq nodejs-repl-prompt-deletion-required-p nil)
-      (let ((beg (or comint-last-output-start
-                     (point-min-marker)))
-            (end (process-mark process)))
+      (pcase-let ((`(,beg . ,end) (nodejs-repl--input-bounds)))
         (save-excursion
           (goto-char beg)
           (ignore-errors
@@ -373,19 +379,17 @@ when receive the output string."
                  (search-backward-regexp "[[:graph:]]" nil t)
                  (or (sexp-at-point) (intern (char-to-string (char-after)))))))
       (when (member exp nodejs-repl-unary-operators)
-       (search-backward (symbol-name exp) nil)))))
+        (search-backward (symbol-name exp) nil)))))
   (point))
 
 (defun nodejs-repl--backward-expression ()
-  (cond
-   ((eq (char-syntax (char-before)) ?\))
-    (backward-list))
-   ((save-excursion
-      (search-backward-regexp "[[:graph:]]" nil t)
-      (eq (char-syntax (char-after)) ?w))
-    (backward-sexp))
-   (t
-    (error "No proper expression is found backward"))))
+  (cond ((eq (char-syntax (char-before)) ?\))
+         (backward-list))
+        ((save-excursion
+           (search-backward-regexp "[[:graph:]]" nil t)
+           (eq (char-syntax (char-after)) ?w))
+         (backward-sexp))
+        (t (error "No proper expression is found backward"))))
 
 (defun nodejs-repl--completion-at-point-function ()
   (setq nodejs-repl-prompt-deletion-required-p t)
@@ -510,24 +514,40 @@ when receive the output string."
       (delete-region (line-beginning-position) (point)))))
 
 (define-derived-mode nodejs-repl-mode comint-mode "Node.js REPL"
-  "Major mode for Node.js REPL."
+  "Major mode for Node.js REPL.
+
+Key bindings:
+\\<nodejs-repl-mode-map>"
   :syntax-table nodejs-repl-mode-syntax-table
   (set (make-local-variable 'font-lock-defaults) '(nil nil t))
   (add-hook 'comint-output-filter-functions 'nodejs-repl--delete-prompt nil t)
   (add-hook 'comint-output-filter-functions 'nodejs-repl--remove-duplicated-prompt nil t)
-  (add-hook 'comint-output-filter-functions 'nodejs-repl--filter-escape-sequnces nil t)
+  (add-hook 'comint-output-filter-functions 'nodejs-repl--filter-escape-sequences nil t)
   (add-hook 'comint-output-filter-functions 'nodejs-repl--clear-cache nil t)
-  (setq comint-input-ignoredups nodejs-repl-input-ignoredups)
-  (setq comint-process-echoes nodejs-repl-process-echoes)
   (add-hook 'completion-at-point-functions 'nodejs-repl--completion-at-point-function nil t)
   (make-local-variable 'window-configuration-change-hook)
   (add-hook 'window-configuration-change-hook 'nodejs-repl--set-prompt-deletion-required-p)
-  (ansi-color-for-comint-mode-on))
+  (setq-local comint-input-ignoredups nodejs-repl-input-ignoredups
+              comint-process-echoes nodejs-repl-process-echoes
+              comint-prompt-read-only t
+              comint-use-prompt-regexp nil
+              comint-output-filter-functions '(ansi-color-process-output)
+              comint-indirect-setup-function
+              (lambda ()
+                (let ((inhibit-message t)
+                      (message-log-max nil))
+                  (cond ((fboundp 'js-ts-mode) (js-ts-mode))
+                        ((fboundp 'js-mode) (js-mode))
+                        (t nil)))))
+  (when (and (null comint-use-prompt-regexp)
+             nodejs-repl-font-lock-enable
+             (require 'js nil t))
+    (comint-fontify-input-mode)))
 
 ;;;###autoload
-(defun nodejs-repl ()
+(defun nodejs-repl (&optional show)
   "Run Node.js REPL."
-  (interactive)
+  (interactive (list t))
   (let ((node-command (if (and (symbolp nodejs-repl-command)
                                (functionp nodejs-repl-command))
                           (funcall nodejs-repl-command)
@@ -539,14 +559,17 @@ when receive the output string."
           (replace-regexp-in-string nodejs-repl--nodejs-version-re "\\1"
                                     (shell-command-to-string (concat node-command " --version"))))
     (let* ((repl-mode (or (getenv "NODE_REPL_MODE") "sloppy"))
-           (nodejs-repl-code (format nodejs-repl-code-format
-                                     nodejs-repl-prompt nodejs-repl-use-global repl-mode)))
-      (pop-to-buffer
-       ;; Node.js 12 ignores almost all keys if TERM is "dumb"
-       ;; cf. https://github.com/nodejs/node/commit/d3a62fe7fc683bf74b3e9c743f73471f0167bd15
-       (apply 'make-comint nodejs-repl-process-name "env" nil
-              `("TERM=xterm" ,node-command ,@nodejs-repl-arguments "-e" ,nodejs-repl-code)))
-      (nodejs-repl-mode))))
+           (nodejs-repl-code
+            (format nodejs-repl-code-format
+                    nodejs-repl-prompt nodejs-repl-use-global repl-mode))
+           ;; Node.js 12 ignores almost all keys if TERM is "dumb"
+           ;; cf. https://github.com/nodejs/node/commit/d3a62fe7fc683bf74b3e9c743f73471f0167bd15
+           (buf (apply 'make-comint nodejs-repl-process-name "env" nil
+                       `( "TERM=xterm" ,node-command ,@nodejs-repl-arguments
+                          "-e" ,nodejs-repl-code))))
+      (with-current-buffer buf
+        (nodejs-repl-mode)
+        (and show (pop-to-buffer (current-buffer)))))))
 
 (provide 'nodejs-repl)
 ;;; nodejs-repl.el ends here
