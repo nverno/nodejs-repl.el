@@ -66,9 +66,10 @@
 ;;
 ;;; Code:
 
+(eval-when-compile (require 'dash))
 (require 'cc-mode)
 (require 'comint)
-(require 'ansi-color)
+(require 'xterm-color)
 
 (defgroup nodejs-repl nil
   "Run Node.js REPL and communicate the process."
@@ -119,7 +120,6 @@ See also `comint-process-echoes'"
 
 (defcustom nodejs-repl-minor-mode-lighter " Node.js-REPL"
   "Text displayed in the mode-line if `nodejs-repl-minor-mode' is active."
-  :group 'nodejs-repl
   :type 'string)
 
 (defvar nodejs-repl-nodejs-version)
@@ -300,8 +300,8 @@ when receive the output string."
   (if (and (not (bolp))
            ;; Ignore repeated prompts when switching windows
            (string-match-p (rx-to-string
-                            `(seq bos (or (+ ,nodejs-repl-prompt)
-                                          (+ ,nodejs-repl-prompt-continue))
+                            `(seq bos (or (* ,nodejs-repl-prompt)
+                                          (* ,nodejs-repl-prompt-continue))
                                   eos))
                            string))
       ""
@@ -509,7 +509,7 @@ Key bindings:
               comint-highlight-input nil
               comint-scroll-to-bottom-on-input 'this
               comint-scroll-to-bottom-on-output 'this
-              comint-output-filter-functions '(ansi-color-process-output)
+              ;; comint-output-filter-functions '(ansi-color-process-output)
               comint-preoutput-filter-functions
               '(xterm-color-filter nodejs-repl--preoutput-filter)
               comint-indirect-setup-function
