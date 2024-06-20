@@ -284,11 +284,9 @@ when receive the output string."
     completions))
 
 (defun nodejs-repl--get-or-create-process ()
-  (let ((proc (get-process nodejs-repl-process-name)))
-    (unless (processp proc)
-      (save-excursion (nodejs-repl))
-      (setq proc (get-process nodejs-repl-process-name)))
-    proc))
+  (or (get-process nodejs-repl-process-name)
+      (with-current-buffer (nodejs-repl)
+        (get-buffer-process (current-buffer)))))
 
 (defun nodejs-repl--clear-cache (_string)
   "Clear caches when outputting the result."
@@ -473,8 +471,8 @@ when receive the output string."
 (defun nodejs-repl-switch-to-repl ()
   "Switch to a `nodejs-repl-process', spawning a new one if necessary."
   (interactive)
-  (pop-to-buffer
-   (process-buffer (nodejs-repl--get-or-create-process))))
+  (--when-let (nodejs-repl--get-or-create-process)
+    (prog1 it (pop-to-buffer (process-buffer it)))))
 
 (defun nodejs-repl-execute (command &optional _buf)
   "Execute a COMMAND and output the result to the temporary buffer."
@@ -499,8 +497,6 @@ Key bindings:
   (setq-local comment-start "//"
               comment-end ""
               comment-start-skip "//+ *")
-  (set (make-local-variable 'font-lock-defaults) '(nil nil t))
-  (add-hook 'comint-output-filter-functions 'nodejs-repl--clear-cache nil t)
   (setq-local comint-input-ignoredups nodejs-repl-input-ignoredups
               comint-process-echoes nodejs-repl-process-echoes
               comint-prompt-regexp nodejs-repl-prompt
@@ -519,12 +515,15 @@ Key bindings:
                   (cond ((fboundp 'js-ts-mode) (js-ts-mode))
                         ((fboundp 'js-mode) (js-mode))
                         (t nil)))))
+  ;; (setq-local font-lock-defaults '(nil nil t))
   (when (and (null comint-use-prompt-regexp)
              nodejs-repl-font-lock-enable
              (require 'js nil t))
     (comint-fontify-input-mode))
+  ;; Completion
   (add-hook 'completion-at-point-functions
-            #'nodejs-repl--completion-at-point-function nil t))
+            #'nodejs-repl--completion-at-point-function nil t)
+  (add-hook 'comint-output-filter-functions 'nodejs-repl--clear-cache nil t))
 
 ;;;###autoload
 (defun nodejs-repl (&optional show)
@@ -551,7 +550,8 @@ Key bindings:
                           "-e" ,nodejs-repl-code))))
       (with-current-buffer buf
         (nodejs-repl-mode)
-        (and show (pop-to-buffer (current-buffer)))))))
+        (prog1 (current-buffer)
+          (and show (pop-to-buffer (current-buffer))))))))
 
 (defvar nodejs-repl-minor-mode-map
   (let ((map (make-sparse-keymap)))
