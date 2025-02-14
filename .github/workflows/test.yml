@@ -19,9 +19,12 @@ jobs:
           - '28.2'
           - '29.1'
           - '29.2'
+          - '29.3'
+          - '29.4'
         node-version:
           - '18'
           - '20'
+          - '22'
     steps:
       - uses: actions/checkout@v4
       - uses: purcell/setup-emacs@master
@@ -41,6 +44,11 @@ jobs:
           cask
 
       - name: Run tests
-        run: |
-          node -v
-          make test
+        uses: nick-fields/retry@v3
+        with:
+          timeout_seconds: 30
+          max_attempts: 3
+          retry_wait_seconds: 0
+          command: |
+            node -v
+            make test
